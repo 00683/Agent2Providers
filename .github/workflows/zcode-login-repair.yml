@@ -1,0 +1,34 @@
+name: ZCode isolated login plugins
+on:
+  push:
+    branches: [fix/zcode-isolated-login-20261120]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm -> target
+          key: zcode-isolated-login
+      - name: Build domestic ZCode plugin
+        run: node wasm/build.mjs zcode
+      - name: Build international ZCode plugin
+        run: node wasm/build.mjs zcode-intl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zcode-isolated-login-plugins
+          path: |
+            wasm/dist/agent2api-wasm-zcode-*.zip
+            wasm/dist/agent2api-wasm-zcode-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

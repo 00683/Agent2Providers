@@ -1,0 +1,52 @@
+name: Trae tool stream repair
+on:
+  push:
+    branches: [fix/trae-tool-fragments-20261120]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm -> target
+          key: trae-stream-repair
+      - name: Prove the regression catches the old prefix-dropping behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp wasm/trae/src/stream.rs "$RUNNER_TEMP/trae-fixed.rs"
+          trap 'cp "$RUNNER_TEMP/trae-fixed.rs" wasm/trae/src/stream.rs' EXIT
+          python - <<'PY'
+          import pathlib
+          p = pathlib.Path('wasm/trae/src/stream.rs')
+          s = p.read_text()
+          needle = 'if incoming.is_empty() {'
+          assert s.count(needle) == 1
+          p.write_text(s.replace(needle, 'if incoming.is_empty() || current == incoming || current.starts_with(incoming) {'))
+          PY
+          if cargo test --manifest-path wasm/Cargo.toml -p agent2api-wasm-trae --locked nested_delta_braces_and_quotes_are_lossless; then
+            echo 'Regression fixture failed to detect the old defect'
+            exit 1
+          fi
+      - name: Run Trae regression tests
+        run: cargo test --manifest-path wasm/Cargo.toml -p agent2api-wasm-trae --locked
+      - name: Build only the Trae WASM package using the official build script
+        run: node wasm/build.mjs trae
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trae-tool-stream-repair
+          path: |
+            wasm/dist/agent2api-wasm-trae-*.zip
+            wasm/dist/agent2api-wasm-trae-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

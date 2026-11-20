@@ -19,6 +19,103 @@ pub struct Output {
     ended: bool,
 }
 
+#[cfg(test)]
+mod tool_stream_regression {
+    use super::*;
+
+    fn output() -> Output {
+        Output {
+            id: "test".into(), model: "test".into(), created: 0,
+            started: false, terminal: false, failure: None, usage: None,
+            reasoning: String::new(), last_reasoning: String::new(),
+            tools_seen: false, tool_calls: Vec::new(), ended: false,
+        }
+    }
+
+    fn push(out: &mut Output, index: u64, piece: &str, terminal: bool) {
+        out.observe_tools(json!([{"index": index, "id": format!("call_{index}"),
+            "function": {"name": "receiver", "arguments": piece}}]), terminal).unwrap();
+    }
+
+    #[test]
+    fn nested_delta_braces_and_quotes_are_lossless() {
+        let mut out = output();
+        for piece in ["{\"outer\":", "{", "\"x\":1,\"s\":", "\"", "\"", "}}"] {
+            push(&mut out, 0, piece, false);
+        }
+        let calls = out.assembled_tools().unwrap();
+        let args: Value = serde_json::from_str(calls[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args, json!({"outer":{"x":1,"s":""}}));
+    }
+
+    #[test]
+    fn repeated_text_and_single_character_fragments_survive() {
+        let expected = json!({"s":"aaaa \"quotes\" 中文 😀", "nested":{"items":[{"n":1}]}});
+        let encoded = expected.to_string();
+        let mut out = output();
+        for ch in encoded.chars() { push(&mut out, 0, &ch.to_string(), false); }
+        let calls = out.assembled_tools().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(calls[0]["function"]["arguments"].as_str().unwrap()).unwrap(), expected);
+    }
+
+    #[test]
+    fn interleaved_calls_keep_their_own_fragments() {
+        let mut out = output();
+        push(&mut out, 0, "{\"a\":", false);
+        push(&mut out, 1, "{\"b\":", false);
+        push(&mut out, 0, "1}", false);
+        push(&mut out, 1, "2}", false);
+        let calls = out.assembled_tools().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["function"]["arguments"], "{\"a\":1}");
+        assert_eq!(calls[1]["function"]["arguments"], "{\"b\":2}");
+    }
+
+    #[test]
+    fn typed_snapshot_and_terminal_snapshot_replace_partial_state() {
+        let mut out = output();
+        push(&mut out, 0, "{\"old\":", false);
+        out.observe_tools(json!([{"index":0,"function":{"arguments":{"x":1}}}]), false).unwrap();
+        assert_eq!(out.assembled_tools().unwrap()[0]["function"]["arguments"], "{\"x\":1}");
+        push(&mut out, 0, "{\"x\":2}", true);
+        assert_eq!(out.assembled_tools().unwrap()[0]["function"]["arguments"], "{\"x\":2}");
+    }
+
+    #[test]
+    fn terminal_delta_can_complete_a_call_without_becoming_a_snapshot() {
+        let mut out = output();
+        push(&mut out, 0, "{\"x\":", false);
+        let data = json!({"tool_calls":null,"delta":{"tool_calls":[{
+            "index":0,"function":{"arguments":"1}"}}]}});
+        let sse = format!("event: done\ndata: {}\n\n", data);
+        let mut decoder = super::super::events::Decoder::default();
+        for event in decoder.push(sse.as_bytes()).unwrap() {
+            // Native unit tests have no WASM host for emitting the response.
+            // Assembly must succeed before that host boundary is reached.
+            if let Err(error) = out.apply(event) {
+                assert!(error.message.contains("只能由 Wasm 宿主调用"));
+            }
+        }
+        assert!(out.terminal);
+        assert!(out.failure.is_none());
+        assert_eq!(out.assembled_tools().unwrap()[0]["function"]["arguments"], "{\"x\":1}");
+    }
+
+    #[test]
+    fn incomplete_arguments_still_fail() {
+        let mut out = output();
+        push(&mut out, 0, "{\"x\":", false);
+        assert!(out.assembled_tools().unwrap_err().message.contains("被截断"));
+    }
+
+    #[test]
+    fn buffer_limit_still_applies_to_deltas_and_snapshots() {
+        let oversized = "x".repeat(MAX_TOOL_BUFFER + 1);
+        assert!(merge_piece(&mut String::new(), &oversized, false).is_err());
+        assert!(merge_piece(&mut String::new(), &oversized, true).is_err());
+    }
+}
+
 #[derive(Default)]
 struct ToolCall {
     id: String,
@@ -241,13 +338,17 @@ fn complete_arguments(value: &str) -> bool {
     !value.is_empty() && serde_json::from_str::<Value>(value).is_ok()
 }
 
-fn merge_piece(current: &mut String, incoming: &str) -> Result<()> {
-    if incoming.is_empty() || current == incoming || current.starts_with(incoming) {
+fn merge_piece(current: &mut String, incoming: &str, snapshot: bool) -> Result<()> {
+    if incoming.is_empty() {
         return Ok(());
     }
-    if incoming.starts_with(current.as_str()) {
-        *current = incoming.into();
-    } else if complete_arguments(incoming) && !complete_arguments(&(current.clone() + incoming)) {
+    if incoming.len() > MAX_TOOL_BUFFER {
+        return Err(Error::http(502, "Trae 工具参数超过受控缓冲大小"));
+    }
+    // JSON objects and complete terminal-frame arguments are snapshots. String
+    // deltas are lossless: a repeated prefix can be a legitimate nested brace,
+    // quote or repeated text, rather than a replay of an earlier snapshot.
+    if snapshot {
         *current = incoming.into();
     } else {
         if current.len().saturating_add(incoming.len()) > MAX_TOOL_BUFFER {
@@ -333,7 +434,7 @@ impl Output {
         Ok(())
     }
 
-    fn observe_tools(&mut self, value: Value) -> Result<()> {
+    fn observe_tools(&mut self, value: Value, terminal: bool) -> Result<()> {
         let calls = match value {
             Value::Array(calls) => calls,
             Value::Object(_) => vec![value],
@@ -376,10 +477,11 @@ impl Output {
                 .or_else(|| call.get("params"))
                 .or_else(|| call.get("input"))
                 .or_else(|| call.get("parameters"));
-            let arguments = match arguments {
-                None | Some(Value::Null) => String::new(),
-                Some(Value::String(text)) => text.clone(),
-                Some(value) => value.to_string(),
+            let (arguments, snapshot) = match arguments {
+                None | Some(Value::Null) => (String::new(), false),
+                Some(Value::String(text)) => (text.clone(), terminal
+                    && serde_json::from_str::<Value>(text).is_ok_and(|value| value.is_object())),
+                Some(value) => (value.to_string(), true),
             };
             if arguments.len() > MAX_TOOL_BUFFER {
                 return Err(Error::http(502, "Trae 工具参数过长"));
@@ -436,7 +538,7 @@ impl Output {
                     target.name.push_str(&name);
                 }
             }
-            merge_piece(&mut target.arguments, &arguments)?;
+            merge_piece(&mut target.arguments, &arguments, snapshot)?;
             if self
                 .tool_calls
                 .iter()
@@ -450,7 +552,7 @@ impl Output {
         Ok(())
     }
 
-    fn flush_tools(&mut self) -> Result<()> {
+    fn assembled_tools(&mut self) -> Result<Vec<Value>> {
         let mut calls = Vec::new();
         for (index, call) in self.tool_calls.iter_mut().enumerate() {
             if call.name.is_empty() {
@@ -471,6 +573,11 @@ impl Output {
             calls.push(json!({ "index": index, "id": call.id, "type": "function",
                 "function": { "name": call.name, "arguments": call.arguments } }));
         }
+        Ok(calls)
+    }
+
+    fn flush_tools(&mut self) -> Result<()> {
+        let calls = self.assembled_tools()?;
         if !calls.is_empty() {
             self.tools_seen = true;
             self.frame(json!({ "tool_calls": calls }), None, false)?;
@@ -504,7 +611,7 @@ impl Output {
                     delta["reasoning_content"] = json!(reasoning);
                 }
                 if let Some(tools) = tools {
-                    self.observe_tools(tools)?;
+                    self.observe_tools(tools, false)?;
                 }
                 if delta.as_object().is_some_and(|v| !v.is_empty()) {
                     self.frame(delta, None, false)?;
@@ -514,9 +621,18 @@ impl Output {
             Event::Done {
                 reason,
                 usage: final_usage,
+                tools,
+                tools_snapshot,
             } => {
                 if let Some(value) = final_usage.as_ref().and_then(usage) {
                     self.usage = Some(merge_usage(self.usage.take(), value));
+                }
+                if self.failure.is_none() {
+                    if let Some(tools) = tools {
+                        if let Err(error) = self.observe_tools(tools, tools_snapshot) {
+                            self.fail(error)?;
+                        }
+                    }
                 }
                 self.terminal = true;
                 if matches!(reason.as_str(), "content_filter" | "safety") {

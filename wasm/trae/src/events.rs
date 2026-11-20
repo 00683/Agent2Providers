@@ -14,9 +14,56 @@ pub enum Event {
     Done {
         reason: String,
         usage: Option<Value>,
+        tools: Option<Value>,
+        tools_snapshot: bool,
     },
     Error(Error),
     Other,
+}
+
+#[cfg(test)]
+mod terminal_tool_regression {
+    use super::*;
+
+    #[test]
+    fn terminal_snapshot_is_not_discarded() {
+        let tools = serde_json::json!([{"index":0,"function":{"arguments":"{\"x\":1}"}}]);
+        let data = serde_json::json!({"finish_reason":"tool_calls", "tool_calls":tools}).to_string();
+        match parse("done", &data).unwrap() {
+            Event::Done { tools: Some(actual), tools_snapshot, .. } => {
+                assert_eq!(actual, tools); assert!(tools_snapshot);
+            }
+            _ => panic!("terminal tool snapshot was lost"),
+        }
+    }
+
+    #[test]
+    fn terminal_delta_remains_a_delta() {
+        let data = serde_json::json!({"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}).to_string();
+        match parse("done", &data).unwrap() {
+            Event::Done { tools: Some(_), tools_snapshot, .. } => assert!(!tools_snapshot),
+            _ => panic!("terminal tool delta was lost"),
+        }
+    }
+
+    #[test]
+    fn null_root_does_not_hide_terminal_delta() {
+        let data = serde_json::json!({"tool_calls":null,
+            "delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}).to_string();
+        match parse("done", &data).unwrap() {
+            Event::Done { tools: Some(_), tools_snapshot, .. } => assert!(!tools_snapshot),
+            _ => panic!("null root hid the terminal delta"),
+        }
+    }
+
+    #[test]
+    fn byte_fragmented_sse_keeps_terminal_tool_arguments() {
+        let text = "event: done\r\ndata: {\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"s\\\":\\\"中文\\\"}\"}}]}\r\n\r\n";
+        let mut decoder = Decoder::default(); let mut events = Vec::new();
+        for byte in text.bytes() { events.extend(decoder.push(&[byte]).unwrap()); }
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::Done { tools: Some(_), .. }));
+    }
 }
 
 fn finish_reason(value: &Value) -> String {
@@ -62,6 +109,8 @@ fn parse(event: &str, data: &str) -> Result<Event> {
             Event::Done {
                 reason: "stop".into(),
                 usage: None,
+                tools: None,
+                tools_snapshot: false,
             }
         } else {
             Event::Other
@@ -113,6 +162,7 @@ fn parse(event: &str, data: &str) -> Result<Event> {
                 ]),
                 tools: parsed
                     .get("tool_calls")
+                    .filter(|v| !v.is_null())
                     .or_else(|| parsed.pointer("/delta/tool_calls"))
                     .filter(|v| !v.is_null())
                     .cloned(),
@@ -125,6 +175,13 @@ fn parse(event: &str, data: &str) -> Result<Event> {
                 .get("usage")
                 .filter(|value| value.is_object())
                 .cloned(),
+            tools: parsed
+                .get("tool_calls")
+                .filter(|value| !value.is_null())
+                .or_else(|| parsed.pointer("/delta/tool_calls"))
+                .filter(|value| !value.is_null())
+                .cloned(),
+            tools_snapshot: parsed.get("tool_calls").is_some_and(|value| !value.is_null()),
         },
         _ => Event::Other,
     })

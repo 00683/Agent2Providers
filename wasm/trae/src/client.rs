@@ -29,6 +29,7 @@ pub fn read(response: http::Response) -> Result<Reply> {
 }
 
 pub fn post(url: &str, headers: Value, body: &Value) -> Result<Reply> {
+    errors::diagnostic_http_open();
     read(http::open("POST", url, headers, Some(body)).map_err(errors::transport)?)
 }
 

@@ -37,13 +37,22 @@ pub fn diagnostic_phase(stage: &str) {
     });
 }
 
-pub fn diagnostic_response(status: u16, content_type: &str) {
+pub fn diagnostic_http_open() {
     CHAT_DIAGNOSTIC.with(|slot| {
         if let Some(value) = slot.borrow_mut().as_mut() {
-            // This is a new HTTP response, including each catalog fallback.
             if let Some(fields) = value.as_object_mut() {
-                for key in ["envelope", "interpreter_http", "non_json"] { fields.remove(key); }
+                for key in ["upstream_http", "content_type", "envelope", "interpreter_http", "non_json"] {
+                    fields.remove(key);
+                }
             }
+        }
+    });
+}
+
+pub fn diagnostic_response(status: u16, content_type: &str) {
+    diagnostic_http_open();
+    CHAT_DIAGNOSTIC.with(|slot| {
+        if let Some(value) = slot.borrow_mut().as_mut() {
             value["upstream_http"] = json!(status);
             value["content_type"] = json!(diagnostic_content_type(content_type));
         }
@@ -235,6 +244,22 @@ mod diagnostic_tests {
             let value = slot.borrow(); let value = value.as_ref().unwrap();
             assert_eq!(value["upstream_http"], 503);
             assert_eq!(value["envelope"]["upstream_code"], 6333);
+        });
+    }
+
+    #[test]
+    fn next_http_open_clears_old_reply_even_if_connect_fails() {
+        let _scope = DiagnosticScope::start();
+        diagnostic_phase("chat_catalog");
+        diagnostic_response(503, "application/json");
+        let _ = upstream(503, &json!({"code":6333, "message":"service unavailable"}));
+        diagnostic_http_open();
+        CHAT_DIAGNOSTIC.with(|slot| {
+            let value = slot.borrow(); let value = value.as_ref().unwrap();
+            assert_eq!(value["stage"], "chat_catalog");
+            for field in ["upstream_http", "content_type", "envelope", "interpreter_http", "non_json"] {
+                assert!(value.get(field).is_none());
+            }
         });
     }
 

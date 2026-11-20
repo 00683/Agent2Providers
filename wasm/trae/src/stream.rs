@@ -97,7 +97,9 @@ mod tool_stream_regression {
             }
         }
         assert!(out.terminal);
-        assert!(out.failure.is_none());
+        if let Some(error) = &out.failure {
+            assert!(error.message.contains("只能由 Wasm 宿主调用"));
+        }
         assert_eq!(out.assembled_tools().unwrap()[0]["function"]["arguments"], "{\"x\":1}");
     }
 

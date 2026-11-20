@@ -112,7 +112,7 @@ fn parse(event: &str, data: &str) -> Result<Event> {
         "output" | "message" | "delta" | "content" | "text" | "answer" | "chunk"
         | "output_delta" | "message_delta" | "token_usage" | "done" | "response_done"
         | "stream_done" | "error");
-    if data == "[KEEPALIVE]" && event != "error" {
+    if data == "[KEEPALIVE]" && (control || event.is_empty()) {
         return Ok(Event::Other);
     }
     if data.is_empty() || data == "[DONE]" {
@@ -240,7 +240,8 @@ mod control_frame_regression {
 
     #[test]
     fn actual_payload_errors_are_still_errors() {
-        for (event, data) in [("output", "not json"), ("output", "null"), ("error", "null"),
+        for (event, data) in [("output", "not json"), ("output", "null"),
+            ("output", "[KEEPALIVE]"), ("delta", "[KEEPALIVE]"), ("error", "null"),
             ("error", "[KEEPALIVE]")] {
             assert!(parse(event, data).is_err());
         }

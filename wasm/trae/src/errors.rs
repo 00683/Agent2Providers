@@ -41,7 +41,7 @@ pub fn diagnostic_http_open() {
     CHAT_DIAGNOSTIC.with(|slot| {
         if let Some(value) = slot.borrow_mut().as_mut() {
             if let Some(fields) = value.as_object_mut() {
-                for key in ["upstream_http", "content_type", "envelope", "interpreter_http", "non_json"] {
+                for key in ["upstream_http", "content_type", "envelope", "interpreter_http", "non_json", "sse_chunks"] {
                     fields.remove(key);
                 }
             }
@@ -159,6 +159,70 @@ pub fn diagnostic_non_json(status: u16, content_type: &str, bytes: &[u8]) {
     });
 }
 
+pub fn diagnostic_sse_chunk(bytes: &[u8]) {
+    // Only fixed frame names and data shapes survive. In particular this never
+    // retains text, JSON values, tool arguments or the raw network bytes.
+    let mut events = Vec::new();
+    let mut shapes = Vec::new();
+    let text = String::from_utf8_lossy(bytes);
+    for line in text.lines() {
+        if let Some(name) = line.strip_prefix("event:") {
+            let kind = match name.trim().to_ascii_lowercase().as_str() {
+                "ping" => "ping", "pong" => "pong", "heartbeat" => "heartbeat",
+                "keepalive" | "keep-alive" => "keepalive", "output" => "output",
+                "done" | "response_done" | "stream_done" => "done",
+                "error" => "error", "token_usage" => "token_usage",
+                "metadata" => "metadata", _ => "other",
+            };
+            if events.len() < 8 { events.push(kind); }
+        }
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            let shape = match data {
+                "" => "empty", "null" => "null", "[DONE]" => "done_marker",
+                "[KEEPALIVE]" => "keepalive_marker", "true" | "false" => "boolean",
+                _ => match data.as_bytes().first() {
+                    Some(b'{') => "object_like", Some(b'[') => "array_like",
+                    Some(b'\"') => "string_like", Some(b'0'..=b'9' | b'-') => "number_like",
+                    _ => "plain_text_or_partial",
+                },
+            };
+            if shapes.len() < 8 { shapes.push(shape); }
+        }
+    }
+    CHAT_DIAGNOSTIC.with(|slot| {
+        if let Some(value) = slot.borrow_mut().as_mut() {
+            let mut rows = value["sse_chunks"].as_array().cloned().unwrap_or_default();
+            if rows.len() > 2 { rows.drain(..rows.len() - 2); }
+            rows.push(json!({ "bytes": bytes.len(), "events": events, "data_shapes": shapes }));
+            value["sse_chunks"] = json!(rows);
+        }
+    });
+}
+
+fn local_failure_kind(message: &str) -> &'static str {
+    match message {
+        "Trae 流式事件不是有效 JSON" => "invalid_sse_json",
+        "Trae 嵌套流式事件无效" => "invalid_nested_sse_json",
+        "Trae 流式事件不是对象" => "non_object_sse_data",
+        "Trae SSE 不是有效 UTF-8" => "invalid_sse_utf8",
+        "Trae 单个流式事件超过大小限制" => "sse_event_size_limit",
+        "Trae 工具参数在完成前被截断，未提交不完整调用" => "incomplete_tool_arguments",
+        "Trae 工具参数超过受控缓冲大小" => "tool_buffer_limit",
+        "Trae 工具调用片段格式无效" => "invalid_tool_fragment",
+        "Trae 工具调用片段不是对象" => "non_object_tool_fragment",
+        "Trae 工具数量超过限制" => "tool_count_limit",
+        "Trae 思考流超过受控缓冲大小" => "reasoning_buffer_limit",
+        "Trae 未给出可识别的结束原因" => "unknown_finish_reason",
+        "Trae 结束前没有返回有效回答" => "no_valid_output",
+        "Trae 上游未给出完成事件即中断，回答可能不完整" => "missing_terminal",
+        "Trae 上游未接受本次请求" => "upstream_envelope",
+        "Trae 网络请求失败，请检查出口网络" => "transport",
+        "Trae 上游未返回有效 JSON" => "invalid_http_json",
+        _ => "other",
+    }
+}
+
 #[cfg(test)]
 mod diagnostic_tests {
     use super::*;
@@ -264,6 +328,26 @@ mod diagnostic_tests {
     }
 
     #[test]
+    fn local_decoder_failure_keeps_only_its_fixed_kind_and_control_frame_shape() {
+        let _scope = DiagnosticScope::start();
+        diagnostic_phase("chat_sse_reply");
+        diagnostic_response(200, "text/event-stream");
+        let bytes = b"event: ping\ndata: null\n\nevent: output\ndata: null\n\nevent: output\ndata: {\"response\":\"private response text\"}\n\n";
+        diagnostic_sse_chunk(bytes);
+        let events = crate::events::Decoder::default().push(bytes).unwrap();
+        let error = events.iter().find_map(|event| match event {
+            crate::events::Event::Error(error) => Some(error), _ => None,
+        }).expect("fixture did not reach the decoder failure");
+        assert_eq!(local_failure_kind(&error.message), "non_object_sse_data");
+        CHAT_DIAGNOSTIC.with(|slot| {
+            let value = slot.borrow(); let value = value.as_ref().unwrap();
+            assert_eq!(value["sse_chunks"][0]["events"][0], "ping");
+            assert_eq!(value["sse_chunks"][0]["data_shapes"][0], "null");
+            assert!(!value.to_string().contains("private response text"));
+        });
+    }
+
+    #[test]
     fn non_json_diagnostic_stores_title_and_fingerprint_only() {
         let _scope = DiagnosticScope::start();
         diagnostic_non_json(502, "text/html", b"<title>Bad Gateway</title><body>private response body</body>");
@@ -282,6 +366,8 @@ pub fn save_chat_failure(error: &Error) {
     entry["mapped_status"] = json!(error.status);
     entry["mapped_code"] = json!(error.code);
     entry["mapped_upstream_code"] = json!(error.upstream_code);
+    entry["local_failure"] = json!(local_failure_kind(&error.message));
+    entry["local_failure_sha256"] = json!(util::digest(error.message.as_bytes()));
     // Bounded account-scoped diagnostics. A failed write cannot alter the
     // original error, routing, cooldown, credentials or retry behavior.
     use agent2api_wasm_sdk::state::{self, Scope};

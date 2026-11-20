@@ -71,6 +71,7 @@ fn consume(mut response: http::Response, output: &mut Output) -> Result<()> {
                 break;
             }
         };
+        errors::diagnostic_sse_chunk(&bytes);
         for event in decoder.push(&bytes)? {
             output.apply(event)?;
             // 首内容前业务错误及时交给路由/续期；不消费错误后的正常文本。

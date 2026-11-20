@@ -97,32 +97,50 @@ fn event_name(value: &str) -> String {
     out.trim_matches('_').into()
 }
 
+fn bare_done() -> Event {
+    Event::Done { reason: "stop".into(), usage: None, tools: None, tools_snapshot: false }
+}
+
 fn parse(event: &str, data: &str) -> Result<Event> {
     let event = event_name(event);
     let data = data.trim();
+    let terminal = matches!(event.as_str(), "done" | "response_done" | "stream_done");
+    // The native adapter ignores non-chat events. Heartbeats and telemetry do
+    // not have to contain a JSON object, but a valid business-error envelope
+    // inside any event must still be checked below.
+    let control = !event.is_empty() && !matches!(event.as_str(),
+        "output" | "message" | "delta" | "content" | "text" | "answer" | "chunk"
+        | "output_delta" | "message_delta" | "token_usage" | "done" | "response_done"
+        | "stream_done" | "error");
+    if data == "[KEEPALIVE]" && event != "error" {
+        return Ok(Event::Other);
+    }
     if data.is_empty() || data == "[DONE]" {
         return Ok(if event == "error" {
             Event::Error(errors::upstream(502, &Value::Null))
-        } else if matches!(event.as_str(), "done" | "response_done" | "stream_done")
-            || data == "[DONE]"
+        } else if terminal || data == "[DONE]"
         {
-            Event::Done {
-                reason: "stop".into(),
-                usage: None,
-                tools: None,
-                tools_snapshot: false,
-            }
+            bare_done()
         } else {
             Event::Other
         });
     }
-    let mut parsed: Value =
-        serde_json::from_str(data).map_err(|_| Error::http(502, "Trae 流式事件不是有效 JSON"))?;
+    let mut parsed: Value = match serde_json::from_str(data) {
+        Ok(value) => value,
+        Err(_) if control => return Ok(Event::Other),
+        Err(_) => return Err(Error::http(502, "Trae 流式事件不是有效 JSON")),
+    };
     if let Some(inner) = parsed.as_str() {
-        parsed =
-            serde_json::from_str(inner).map_err(|_| Error::http(502, "Trae 嵌套流式事件无效"))?;
+        parsed = match serde_json::from_str(inner) {
+            Ok(value) => value,
+            Err(_) if control => return Ok(Event::Other),
+            Err(_) if terminal => return Ok(bare_done()),
+            Err(_) => return Err(Error::http(502, "Trae 嵌套流式事件无效")),
+        };
     }
     if !parsed.is_object() {
+        if control { return Ok(Event::Other); }
+        if terminal { return Ok(bare_done()); }
         return Err(Error::http(502, "Trae 流式事件不是对象"));
     }
     let kind = if event.is_empty() {
@@ -185,6 +203,50 @@ fn parse(event: &str, data: &str) -> Result<Event> {
         },
         _ => Event::Other,
     })
+}
+
+#[cfg(test)]
+mod control_frame_regression {
+    use super::*;
+
+    #[test]
+    fn control_frames_do_not_interrupt_a_valid_response() {
+        for control in [
+            "event: ping\ndata: null\n\n",
+            "event: heartbeat\ndata: [KEEPALIVE]\n\n",
+            "event: pong\ndata: \"pong\"\n\n",
+            "event: timing_cost\ndata: 12\n\n",
+            "event: metadata\ndata: []\n\n",
+            "event: extra_info\ndata: informational text\n\n",
+            "data: [KEEPALIVE]\n\n",
+        ] {
+            let input = format!("{control}event: output\ndata: {{\"response\":\"OK\"}}\n\nevent: done\ndata: {{\"finish_reason\":\"stop\"}}\n\n");
+            let mut decoder = Decoder::default();
+            let mut events = Vec::new();
+            for bytes in input.as_bytes().chunks(7) { events.extend(decoder.push(bytes).unwrap()); }
+            events.extend(decoder.finish().unwrap());
+            assert!(!events.iter().any(|event| matches!(event, Event::Error(_))));
+            assert!(events.iter().any(|event| matches!(event, Event::Output {text, ..} if text == "OK")));
+            assert!(matches!(events.last(), Some(Event::Done {..})));
+        }
+    }
+
+    #[test]
+    fn terminal_control_can_have_primitive_json_metadata() {
+        for metadata in ["null", "123", "[]", "\"complete\""] {
+            assert!(matches!(parse("done", metadata).unwrap(), Event::Done {..}));
+        }
+    }
+
+    #[test]
+    fn actual_payload_errors_are_still_errors() {
+        for (event, data) in [("output", "not json"), ("output", "null"), ("error", "null"),
+            ("error", "[KEEPALIVE]")] {
+            assert!(parse(event, data).is_err());
+        }
+        assert!(matches!(parse("metadata", "{\"code\":4001,\"message\":\"model is unknown\"}").unwrap(), Event::Error(_)));
+        assert!(matches!(parse("error", "{\"code\":6111,\"message\":\"internal error\"}").unwrap(), Event::Error(_)));
+    }
 }
 
 #[derive(Default)]

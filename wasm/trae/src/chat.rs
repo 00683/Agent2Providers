@@ -114,8 +114,10 @@ fn forward_inner(params: &Value) -> Result<()> {
     let routes = match models::for_chat(&record, model) {
         Ok(routes) => routes,
         Err(error) if error.code.as_deref() == Some("trae_session_expired") => {
+            errors::diagnostic_phase("chat_auth_refresh");
             record = refresh::ensure(true, Some(&record["secret"]))?;
             renewed = true;
+            errors::diagnostic_phase("chat_catalog");
             models::for_chat(&record, model)?
         }
         Err(error) => return Err(error),
@@ -179,8 +181,10 @@ fn forward_inner(params: &Value) -> Result<()> {
                     return Ok(());
                 }
                 Err(error) if error.code.as_deref() == Some("trae_session_expired") && !renewed => {
+                    errors::diagnostic_phase("chat_auth_refresh");
                     record = refresh::ensure(true, Some(&record["secret"]))?;
                     renewed = true;
+                    errors::diagnostic_phase("chat_catalog");
                     if !models::for_chat(&record, model)?.contains(&route) {
                         return Err(Error::http(
                             409,

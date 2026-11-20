@@ -29,7 +29,9 @@ pub fn diagnostic_phase(stage: &str) {
     CHAT_DIAGNOSTIC.with(|slot| {
         if let Some(value) = slot.borrow_mut().as_mut() {
             // A later route must not inherit the previous route's error envelope.
-            if matches!(stage, "chat_prepare" | "chat_http_open") { *value = json!({}); }
+            if matches!(stage, "chat_auth_refresh" | "chat_catalog" | "chat_prepare" | "chat_http_open") {
+                *value = json!({});
+            }
             value["stage"] = json!(stage);
         }
     });
@@ -38,52 +40,64 @@ pub fn diagnostic_phase(stage: &str) {
 pub fn diagnostic_response(status: u16, content_type: &str) {
     CHAT_DIAGNOSTIC.with(|slot| {
         if let Some(value) = slot.borrow_mut().as_mut() {
+            // This is a new HTTP response, including each catalog fallback.
+            if let Some(fields) = value.as_object_mut() {
+                for key in ["envelope", "interpreter_http", "non_json"] { fields.remove(key); }
+            }
             value["upstream_http"] = json!(status);
-            value["content_type"] = json!(redact_reason(content_type));
+            value["content_type"] = json!(diagnostic_content_type(content_type));
         }
     });
 }
 
-// Error text can echo supplied values. Retain no response body, request,
-// header or account material; strip quoted values, URLs, tokens and identifiers.
+// Upstream messages may echo arbitrary task content or short credentials.
+// Persist only local, fixed descriptions; never interpolate any upstream text.
 fn redact_reason(text: &str) -> String {
-    let mut plain = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for ch in text.chars().take(4096) {
-        if let Some(end) = quote {
-            if escaped { escaped = false; }
-            else if ch == '\\' { escaped = true; }
-            else if ch == end { quote = None; }
-        } else if ch == '"' || ch == '`' {
-            quote = Some(ch);
-            plain.push_str(" <value> ");
-        } else {
-            plain.push(if ch.is_control() { ' ' } else { ch });
-        }
+    let lower = text.to_ascii_lowercase();
+    let categories: &[(&str, &[&str])] = &[
+        ("prompt is too long", &["prompt is too long", "too many tokens", "context length", "maximum context", "context window", "上下文过长", "输入过长"]),
+        ("request body too large", &["request entity too large", "payload too large", "body too large"]),
+        ("invalid tool parameter", &["invalid tool", "tool parameter", "tool input", "tool_call", "function_call", "tool calls", "工具调用"]),
+        ("concurrency limit", &["concurrency", "concurrent", "并发"]),
+        ("rate limit", &["rate limit", "too many requests", "限流", "请求过于频繁"]),
+        ("quota or plan limit", &["quota", "credit", "plan limit", "insufficient balance", "额度", "积分不足"]),
+        ("authentication rejected", &["unauthorized", "unauthenticated", "authenticate", "invalid token", "expired token", "token expired", "invalid api key", "鉴权", "凭据失效"]),
+        ("access forbidden", &["forbidden", "permission denied", "access denied"]),
+        ("model unavailable", &["model is unknown", "model not found", "unknown model", "unsupported model", "model unavailable"]),
+        ("invalid request parameter", &["invalid parameter", "invalid argument", "invalid request", "validation error", "bad request", "参数错误"]),
+        ("service overloaded", &["overload", "capacity", "server busy", "service busy", "服务繁忙"]),
+        ("Bad Gateway", &["bad gateway"]),
+        ("gateway timeout", &["gateway timeout", "timed out", "timeout", "超时"]),
+        ("service unavailable", &["service unavailable", "temporarily unavailable", "not ready"]),
+        ("internal server error", &["internal server error", "internal error", "server error", "backend error"]),
+        ("upstream connection failed", &["connection reset", "connection refused", "dns", "tls", "network error", "socket", "broken pipe"]),
+        ("content policy rejected", &["content filter", "content policy", "safety", "moderation"]),
+        ("empty or interrupted response", &["empty response", "unexpected eof", "incomplete response", "stream interrupted"]),
+    ];
+    let matched: Vec<_> = categories.iter().filter(|(_, markers)| markers.iter().any(|marker| lower.contains(marker)))
+        .map(|(description, _)| *description).collect();
+    if matched.is_empty() { "unrecognized upstream reason".into() }
+    else { matched.join("; ").chars().take(240).collect() }
+}
+
+fn diagnostic_content_type(text: &str) -> &'static str {
+    match text.split(';').next().unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "application/json" => "application/json",
+        "text/event-stream" => "text/event-stream",
+        "text/html" => "text/html",
+        "text/plain" => "text/plain",
+        "" => "absent",
+        _ => "other",
     }
-    let mut hide_next = false;
-    let words: Vec<_> = plain.split_whitespace().map(|word| {
-        let lower = word.to_ascii_lowercase();
-        let label = ["bearer", "basic", "cloud-ide-jwt", "authorization", "access_token",
-            "accesstoken", "refresh_token", "refreshtoken", "api_key", "api-key", "apikey",
-            "secret", "device_id", "deviceid", "machine_id", "machineid"].iter().any(|label|
-                lower.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') == *label);
-        let mut digits = 0;
-        let long_number = word.chars().any(|c| {
-            digits = if c.is_ascii_digit() { digits + 1 } else { 0 };
-            digits >= 9
-        });
-        let token = word.len() >= 24 && word.bytes().all(|c| c.is_ascii_alphanumeric()
-            || b"-_.+/=:;,'()[]<>".contains(&c));
-        let hidden = hide_next || label || token || long_number || word.contains("://")
-            || word.contains('@') || word.contains('\\') || word.starts_with('/')
-            || lower.starts_with("sk-") || lower.contains("token=")
-            || lower.contains("key=") || lower.contains("secret=");
-        hide_next = label;
-        if hidden { "<value>" } else { word }
-    }).collect();
-    words.join(" ").chars().take(240).collect()
+}
+
+fn diagnostic_machine_code(text: &str) -> Option<&'static str> {
+    ["invalid_request_error", "internal_server_error", "internal_error", "server_error",
+        "context_length_exceeded", "rate_limit_exceeded", "rate_limit_error", "quota_exceeded",
+        "insufficient_quota", "authentication_error", "permission_error", "model_not_found",
+        "invalid_argument", "invalid_parameter", "overloaded_error", "service_unavailable",
+        "content_filter", "content_policy_violation", "success", "ok"]
+        .into_iter().find(|code| text.eq_ignore_ascii_case(code))
 }
 
 fn diagnostic_envelope(body: &Value) -> Value {
@@ -98,14 +112,14 @@ fn diagnostic_envelope(body: &Value) -> Value {
         .filter(|text| !text.is_empty()).map(|text| (path, text)));
     let machine_code = [body.pointer("/error/code"), body.get("code"), body.get("Code"),
         body.pointer("/ResponseMetadata/Error/Code")].into_iter().flatten()
-        .filter_map(Value::as_str).find(|text| text.len() <= 64
-            && text.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)))
-        .map(redact_reason);
+        .filter_map(Value::as_str).find_map(diagnostic_machine_code);
     let (field, reason, fingerprint) = source.map(|(field, text)|
         (Some(field), Some(redact_reason(text)), Some(util::digest(text.as_bytes()))))
         .unwrap_or_default();
     json!({ "upstream_code": code(body), "machine_code": machine_code,
         "message_field": field, "reason": reason, "reason_sha256": fingerprint,
+        "error_kind": if body["error"].is_object() { "object" } else if body["error"].is_string() { "string" } else { "other" },
+        "error_object_empty": body["error"].as_object().is_some_and(|fields| fields.is_empty()),
         "body_kind": if body.is_object() { "object" } else if body.is_array() { "array" }
             else if body.is_null() { "null" } else { "scalar" } })
 }
@@ -113,8 +127,12 @@ fn diagnostic_envelope(body: &Value) -> Value {
 fn observe_envelope(status: u16, body: &Value) {
     CHAT_DIAGNOSTIC.with(|slot| {
         if let Some(value) = slot.borrow_mut().as_mut() {
-            value["interpreter_http"] = json!(status);
-            if !body.is_null() { value["envelope"] = diagnostic_envelope(body); }
+            // Decoder::push parses a complete chunk before Output sees its first
+            // error. Match Output::fail, which preserves the first failure.
+            if value.get("interpreter_http").is_none() { value["interpreter_http"] = json!(status); }
+            if !body.is_null() && value.get("envelope").is_none() {
+                value["envelope"] = diagnostic_envelope(body);
+            }
         }
     });
 }
@@ -163,6 +181,17 @@ mod diagnostic_tests {
         }
         assert!(reason.contains("invalid tool parameter"));
         assert!(reason.chars().count() <= 240);
+        for text in ["invalid tool input 'private task text'", "invalid tool input private task text",
+            "api_key:short-key deviceId=dev-12345", "凭据：eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl",
+            "JWT={eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl}"] {
+            let summary = redact_reason(text);
+            for private in ["private task text", "short-key", "dev-12345", "eyJhbGci"] {
+                assert!(!summary.contains(private));
+            }
+        }
+        assert_eq!(diagnostic_machine_code("short-key"), None);
+        assert_eq!(diagnostic_machine_code("invalid_request_error"), Some("invalid_request_error"));
+        assert_eq!(diagnostic_content_type("short-secret"), "other");
     }
 
     #[test]
@@ -177,6 +206,35 @@ mod diagnostic_tests {
             assert_eq!(value["stage"], "chat_prepare");
             assert!(value.get("envelope").is_none());
             assert!(value.get("upstream_http").is_none());
+        });
+        diagnostic_response(401, "application/json");
+        let _ = upstream(401, &json!({"error":{"code":401,"message":"unauthorized"}}));
+        diagnostic_phase("chat_auth_refresh");
+        CHAT_DIAGNOSTIC.with(|slot| {
+            let value = slot.borrow(); let value = value.as_ref().unwrap();
+            assert_eq!(value["stage"], "chat_auth_refresh");
+            assert!(value.get("envelope").is_none());
+            assert!(value.get("upstream_http").is_none());
+        });
+    }
+
+    #[test]
+    fn coalesced_sse_errors_retain_the_first_error_and_next_response_resets_it() {
+        let _scope = DiagnosticScope::start();
+        diagnostic_phase("chat_sse_reply");
+        diagnostic_response(200, "text/event-stream");
+        let mut decoder = crate::events::Decoder::default();
+        let events = decoder.push(b"event: error\ndata: {\"code\":6111,\"message\":\"internal error\"}\n\nevent: error\ndata: {\"code\":6222,\"message\":\"service unavailable\"}\n\n").unwrap();
+        assert!(matches!(&events[0], crate::events::Event::Error(error) if error.upstream_code == Some(6111)));
+        CHAT_DIAGNOSTIC.with(|slot| {
+            assert_eq!(slot.borrow().as_ref().unwrap()["envelope"]["upstream_code"], 6111);
+        });
+        diagnostic_response(503, "application/json");
+        let _ = upstream(503, &json!({"code":6333, "message":"service unavailable"}));
+        CHAT_DIAGNOSTIC.with(|slot| {
+            let value = slot.borrow(); let value = value.as_ref().unwrap();
+            assert_eq!(value["upstream_http"], 503);
+            assert_eq!(value["envelope"]["upstream_code"], 6333);
         });
     }
 

@@ -86,6 +86,15 @@ fn consume(mut response: http::Response, output: &mut Output) -> Result<()> {
 }
 
 pub fn forward(params: &Value) -> Result<()> {
+    let _diagnostic = errors::DiagnosticScope::start();
+    let result = forward_inner(params);
+    if let Err(error) = &result {
+        errors::save_chat_failure(error);
+    }
+    result
+}
+
+fn forward_inner(params: &Value) -> Result<()> {
     let mut record = refresh::ensure(false, None)?;
     let model = params["wire_model"]
         .as_str()
@@ -101,6 +110,7 @@ pub fn forward(params: &Value) -> Result<()> {
         .filter(|v| !v.is_empty())
         .unwrap_or(model);
     let mut renewed = false;
+    errors::diagnostic_phase("chat_catalog");
     let routes = match models::for_chat(&record, model) {
         Ok(routes) => routes,
         Err(error) if error.code.as_deref() == Some("trae_session_expired") => {
@@ -114,6 +124,7 @@ pub fn forward(params: &Value) -> Result<()> {
     let mut last = Error::http(404, "Trae 没有可用的模型通道");
     for route in routes {
         loop {
+            errors::diagnostic_phase("chat_prepare");
             let secret = credentials::parse(&record["secret"])?;
             let body = match payload::prepare_body(&params["body"], &route, &session) {
                 Ok(body) => body,
@@ -124,6 +135,7 @@ pub fn forward(params: &Value) -> Result<()> {
                 Err(error) => return Err(error),
             };
             account::unchanged(&record["secret"])?;
+            errors::diagnostic_phase("chat_http_open");
             let response = http::open(
                 "POST",
                 &format!("{}{}", endpoints::AGENT, endpoints::CHAT),
@@ -132,17 +144,20 @@ pub fn forward(params: &Value) -> Result<()> {
             )
             .map_err(errors::transport)?;
             let status = response.status;
+            errors::diagnostic_response(status, response.headers["content-type"].as_str().unwrap_or(""));
             let json_response = response.headers["content-type"]
                 .as_str()
                 .unwrap_or("")
                 .contains("application/json");
             let mut output = Output::new(shown)?;
             let result = if !(200..300).contains(&status) || json_response {
+                errors::diagnostic_phase("chat_json_reply");
                 match client::read(response) {
                     Ok(reply) => Err(errors::upstream(status, &reply.body)),
                     Err(error) => Err(error),
                 }
             } else {
+                errors::diagnostic_phase("chat_sse_reply");
                 let result = consume(response, &mut output);
                 match result {
                     Err(error) => {

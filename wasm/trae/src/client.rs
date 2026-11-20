@@ -11,13 +11,19 @@ pub struct Reply {
 
 pub fn read(response: http::Response) -> Result<Reply> {
     let status = response.status;
+    let content_type = response.headers["content-type"].as_str().unwrap_or("").to_string();
+    errors::diagnostic_response(status, &content_type);
     let bytes = response.bytes(4 * 1024 * 1024).map_err(errors::transport)?;
     let body = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(_) if !(200..300).contains(&status) => {
+            errors::diagnostic_non_json(status, &content_type, &bytes);
             return Err(errors::upstream(status, &Value::Null))
         }
-        Err(_) => return Err(Error::http(502, "Trae 上游未返回有效 JSON")),
+        Err(_) => {
+            errors::diagnostic_non_json(status, &content_type, &bytes);
+            return Err(Error::http(502, "Trae 上游未返回有效 JSON"));
+        }
     };
     Ok(Reply { status, body })
 }

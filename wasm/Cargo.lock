@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "agent2api-wasm-codearts-intl"
-version = "0.1.0+intlfix.20261124.1"
+version = "0.1.0+intlfix.20261124.2"
 dependencies = [
  "agent2api-wasm-sdk",
  "base64",

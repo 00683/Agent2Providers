@@ -33,3 +33,5 @@ The package flags are retained in the usage projection. Token allowances and
 remaining usage use token units, rather than an unknown credit balance.
 Unknown package types and authentication failures remain distinct from this
 explicitly inapplicable case. No successful check-in or grant is recorded for it.
+
+Token-ineligible reports include explicit `retryAt: null`; the existing host consumes this to disable window retries without treating the account as checked in.

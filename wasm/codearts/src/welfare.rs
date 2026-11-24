@@ -109,7 +109,7 @@ fn view(preview: &Value, newbie: bool) -> Result<Value> {
     if preview["notApplicable"] == true {
         return Ok(json!({"provider":endpoints::PROVIDER,"tasks":[],"unclaimed":0,
             "earned":null,"total":null,"settled":false,"applicable":false,
-            "notApplicable":true,"outcome":"inactive","message":preview["message"],
+            "notApplicable":true,"outcome":"ineligible","retryAt":null,"message":preview["message"],
             "note":preview["message"],"subscription":preview["subscription"]}));
     }
     let rows = select(preview, newbie).iter().map(|row| Ok(json!({
@@ -283,10 +283,7 @@ pub fn claim(newbie: bool, manual: bool) -> Result<Value> {
     let initial = view(&before, newbie)?;
     if before["notApplicable"] == true {
         if newbie { return Ok(initial); }
-        let mut result = report("inactive", crate::subscription::TOKEN_WELFARE_NOTE, None);
-        result["notApplicable"] = json!(true);
-        result["applicable"] = json!(false);
-        return Ok(result);
+        return Ok(token_ineligible_report());
     }
     if selected.is_empty() || selected.iter().all(|row| row["observedConfirmed"] == true) {
         if newbie {
@@ -473,6 +470,15 @@ fn report(outcome: &str, message: &str, credit: Option<String>) -> Value {
     json!({"outcome":outcome,"message":message,"credit":credit,"streak":null})
 }
 
+fn token_ineligible_report() -> Value {
+    let mut result = report("ineligible", crate::subscription::TOKEN_WELFARE_NOTE, None);
+    // Explicit null is consumed by the host scheduler; omission invokes its CodeArts retry fallback.
+    result["retryAt"] = Value::Null;
+    result["notApplicable"] = json!(true);
+    result["applicable"] = json!(false);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,10 +490,15 @@ mod tests {
             let result = view(&preview, newbie)?;
             assert_eq!(result["settled"], false);
             assert_eq!(result["applicable"], false);
-            assert_eq!(result["outcome"], "inactive");
+            assert_eq!(result["outcome"], "ineligible");
+            assert_eq!(result.get("retryAt"), Some(&Value::Null));
             assert!(result["earned"].is_null());
             assert!(result["message"].as_str().is_some_and(|message| message.contains("Token")));
         }
+        let daily = token_ineligible_report();
+        assert_eq!(daily["outcome"], "ineligible");
+        assert_eq!(daily.get("retryAt"), Some(&Value::Null));
+        assert!(daily["credit"].is_null());
         Ok(())
     }
 }

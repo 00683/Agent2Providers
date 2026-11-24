@@ -1,6 +1,6 @@
 [package]
 name = "agent2api-wasm-codearts-intl"
-version = "0.1.0+intlfix.20261124.1"
+version = "0.1.0+intlfix.20261124.2"
 edition = "2021"
 license = "AGPL-3.0-only"
 

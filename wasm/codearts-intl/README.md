@@ -22,3 +22,14 @@ Secrets and account identities are scoped to this provider; heartbeat uses the s
 frozen egress for the entire conversation.
 
 Build and verification run in the personal GitHub repair branch workflow. No local Rust build is needed.
+
+## Package-aware welfare
+
+The official 26.10.300 `getWelfareDelivery` checks subscription
+`package.is_token_package === true` and returns no credit campaigns without
+requesting delivery. The international Free / `codearts.agent.trial` account
+was verified read-only to have this flag; it must not be sent to credit check-in.
+The package flags are retained in the usage projection. Token allowances and
+remaining usage use token units, rather than an unknown credit balance.
+Unknown package types and authentication failures remain distinct from this
+explicitly inapplicable case. No successful check-in or grant is recorded for it.

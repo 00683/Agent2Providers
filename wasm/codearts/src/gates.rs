@@ -1,6 +1,9 @@
 use agent2api_wasm_sdk::{json, Error, Value};
 
+#[cfg(not(feature = "intl"))]
 pub const SUMMARY: &str = "CodeArts 已接通对话与会话心跳、网页登录、完整材料自动续期、模型目录、余额、每日福利和新手礼。";
+#[cfg(feature = "intl")]
+pub const SUMMARY: &str = "CodeArts 国际版支持网页登录、续期、模型和余额；Token 套餐展示 Token 额度，不参加积分签到；积分套餐按官方活动处理福利。";
 pub const REFRESH: &str = "当账号包含完整 refresh_token、PKCE verifier 与 DPoP 密钥材料时，由插件在临期或强制刷新时单次轮换并 CAS 写回；无论网页登录或凭据 JSON 导入均支持自动续期。";
 pub const HTTP_BUDGET: &str = "余额和福利请求总期限 20 秒，目录 30 秒；每次请求同时受原调用总预算约束。";
 pub const IDENTITY: &str = "CodeArts 账号需要完整 domain_id 和 user_id；缺失时不按 AK 尾号合并账号。";

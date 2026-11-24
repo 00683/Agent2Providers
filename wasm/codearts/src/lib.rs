@@ -21,6 +21,7 @@ mod models;
 mod network;
 mod refresh;
 mod signer;
+mod subscription;
 mod tool_names;
 mod util;
 mod welfare;
@@ -32,7 +33,7 @@ agent2api_wasm_sdk::export_provider!(handle);
 
 fn metadata() -> Value {
     use agent2api_wasm_sdk::error_rules::{attach, class, rule};
-    let meta = json!({ "id": endpoints::PROVIDER, "label": endpoints::LABEL, "order": 28,
+    let meta = json!({ "id": endpoints::PROVIDER, "label": endpoints::LABEL, "order": if cfg!(feature = "intl") { 29 } else { 28 },
         "capabilities": {
             "chat": true, "stateful": true, "refresh": true, "model_refresh": true, "usage": true,
             "checkin": true, "claims": true, "web_login": true,
@@ -46,7 +47,7 @@ fn metadata() -> Value {
         ],
         "account_features": { "usage": true, "usage_detail": true, "identifier": ["userId", "uid"],
             "expiry": ["expiresAt"], "long_lived": false, "concurrency_default": 3 },
-        "checkin": { "description": "每日福利领取后回读官方活动列表确认；一次性新手礼单独领取，不涉及学生认证、邀请或付费。", "modes": [], "daily": true, "onboarding": true },
+        "checkin": { "description": if cfg!(feature = "intl") { "先识别套餐：Token 套餐不参加积分签到；积分套餐有官方活动时才领取，每日福利与新手礼分开处理。" } else { "每日福利领取后回读官方活动列表确认；一次性新手礼单独领取，不涉及学生认证、邀请或付费。" }, "modes": [], "daily": true, "onboarding": true },
         "default_models": [], "migration_status": gates::status() });
     attach(
         meta,

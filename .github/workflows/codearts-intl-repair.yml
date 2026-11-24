@@ -20,10 +20,10 @@ jobs:
         with:
           workspaces: wasm -> target
           key: codearts-intl
-      - name: Verify regional request targets
+      - name: Verify regional requests and welfare eligibility
         run: |
-          cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-codearts --lib regional_requests
-          cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-codearts-intl --lib regional_requests
+          cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-codearts --lib
+          cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-codearts-intl --lib
       - name: Build domestic and international packages
         run: |
           node wasm/build.mjs codearts

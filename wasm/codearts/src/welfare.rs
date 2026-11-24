@@ -17,11 +17,7 @@ fn request(account: &Account, path: &str, body: &Value) -> Result<Value> {
         label: "福利领取",
         include_host: false,
         domainless: false,
-        headers: vec![
-            ("Content-Type".into(), "application/json".into()),
-            ("Agent-Type".into(), "PromptCenter".into()),
-            ("X-Language".into(), endpoints::LANGUAGE.into()),
-        ],
+        headers: endpoints::welfare_headers(),
     };
     let bytes = body.to_string();
     let headers = signer::signed_request("POST", &target, &account.credential, bytes.as_bytes())?;
@@ -110,6 +106,12 @@ fn amount(rows: &[Value], confirmed_only: bool) -> Value {
 }
 
 fn view(preview: &Value, newbie: bool) -> Result<Value> {
+    if preview["notApplicable"] == true {
+        return Ok(json!({"provider":endpoints::PROVIDER,"tasks":[],"unclaimed":0,
+            "earned":null,"total":null,"settled":false,"applicable":false,
+            "notApplicable":true,"outcome":"inactive","message":preview["message"],
+            "note":preview["message"],"subscription":preview["subscription"]}));
+    }
     let rows = select(preview, newbie).iter().map(|row| Ok(json!({
         "key": key(&row["id"])? , "title": row["title"], "group": if newbie { "新人注册礼" } else { "每日福利" },
         "points": row["benefitAmount"], "unit": row["benefitUnit"], "done": row["observedConfirmed"],
@@ -152,6 +154,15 @@ pub fn status(newbie: bool) -> Result<Value> {
 
 pub fn status_with_refresh(newbie: bool, refresh: bool) -> Result<Value> {
     let account = Account::current()?;
+    let regional_preview = if cfg!(feature = "intl") {
+        Some(welfare_read::preview(newbie)?)
+    } else {
+        None
+    };
+    if let Some(preview) = regional_preview.as_ref().filter(|preview| preview["notApplicable"] == true) {
+        account.unchanged()?;
+        return view(preview, newbie);
+    }
     if newbie && !refresh {
         let memory = sdk::host("ledger.get", json!({"kind":"onboarding"}))?;
         let binding = sdk::host("ledger.get", json!({"kind":"codeartsOnboardingBinding"}))?;
@@ -174,7 +185,11 @@ pub fn status_with_refresh(newbie: bool, refresh: bool) -> Result<Value> {
             return Ok(result);
         }
     }
-    let result = view(&welfare_read::preview(newbie)?, newbie)?;
+    let preview = match regional_preview {
+        Some(preview) => preview,
+        None => welfare_read::preview(newbie)?,
+    };
+    let result = view(&preview, newbie)?;
     account.unchanged()?;
     if newbie {
         save_memory(&result, &account)?;
@@ -266,6 +281,13 @@ pub fn claim(newbie: bool, manual: bool) -> Result<Value> {
     account.unchanged()?;
     let selected = select(&before, newbie);
     let initial = view(&before, newbie)?;
+    if before["notApplicable"] == true {
+        if newbie { return Ok(initial); }
+        let mut result = report("inactive", crate::subscription::TOKEN_WELFARE_NOTE, None);
+        result["notApplicable"] = json!(true);
+        result["applicable"] = json!(false);
+        return Ok(result);
+    }
     if selected.is_empty() || selected.iter().all(|row| row["observedConfirmed"] == true) {
         if newbie {
             save_memory(&initial, &account)?;
@@ -449,4 +471,23 @@ pub fn claim(newbie: bool, manual: bool) -> Result<Value> {
 
 fn report(outcome: &str, message: &str, credit: Option<String>) -> Value {
     json!({"outcome":outcome,"message":message,"credit":credit,"streak":null})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn inapplicable_welfare_is_not_claimed_or_settled() -> Result<()> {
+        let preview = json!({"notApplicable":true,"message":crate::subscription::TOKEN_WELFARE_NOTE,
+            "subscription":{"isTokenPackage":true,"isCreditPackage":false}});
+        for newbie in [false, true] {
+            let result = view(&preview, newbie)?;
+            assert_eq!(result["settled"], false);
+            assert_eq!(result["applicable"], false);
+            assert_eq!(result["outcome"], "inactive");
+            assert!(result["earned"].is_null());
+            assert!(result["message"].as_str().is_some_and(|message| message.contains("Token")));
+        }
+        Ok(())
+    }
 }

@@ -7,7 +7,35 @@ use crate::{binding::Account, endpoints::ReadRequest, errors, gates, network, ut
 
 pub fn preview(newbie_only: bool) -> Result<Value> {
     let account = Account::current()?;
-    let payload = network::get(&account, ReadRequest::Delivery, 1024 * 1024)?;
+    let secrets = account.credential.secrets();
+    let result = preview_from(newbie_only, &secrets, util::now()?, |request| {
+        network::get(&account, request, 2 * 1024 * 1024)
+    })?;
+    account.unchanged()?;
+    Ok(result)
+}
+
+fn preview_from(
+    newbie_only: bool,
+    secrets: &[String],
+    observed_at: i64,
+    mut query: impl FnMut(ReadRequest<'_>) -> Result<Value>,
+) -> Result<Value> {
+    if cfg!(feature = "intl") {
+        let statistics = query(ReadRequest::Statistics)?;
+        let (token, credit) = crate::subscription::flags(&statistics)?;
+        if token == Some(true) {
+            // Matches official getWelfareDelivery: token plans never call delivery.
+            return Ok(json!({"provider":crate::endpoints::PROVIDER,"readOnly":true,
+                "observedAt":observed_at,"campaigns":[],"notApplicable":true,
+                "applicable":false,"claimEnabled":false,"claimedToday":null,
+                "claimedPoints":null,"message":crate::subscription::TOKEN_WELFARE_NOTE,
+                "note":crate::subscription::TOKEN_WELFARE_NOTE,
+                "subscription":{"isTokenPackage":token,"isCreditPackage":credit},
+                "httpBudget":gates::HTTP_BUDGET}));
+        }
+    }
+    let payload = query(ReadRequest::Delivery)?;
     if payload["code"].as_i64() != Some(0) {
         return Err(errors::protocol(
             "CodeArts 活动状态未得到 code=0 确认，未当作没有活动",
@@ -17,7 +45,6 @@ pub fn preview(newbie_only: bool) -> Result<Value> {
         .as_array()
         .filter(|items| items.len() <= 256)
         .ok_or_else(|| errors::protocol("CodeArts 活动状态缺少有效 items 数组"))?;
-    let secrets = account.credential.secrets();
     let mut rows = Vec::new();
     for item in items {
         if !item.is_object() {
@@ -76,9 +103,8 @@ pub fn preview(newbie_only: bool) -> Result<Value> {
             "knownRewardType": known, "claimEnabled": known,
             "freeConfirmed": null, "agreementRequired": null, "paymentRequired": null }));
     }
-    account.unchanged()?;
     Ok(
-        json!({ "provider": crate::endpoints::PROVIDER, "readOnly": true, "observedAt": util::now()?, "campaigns": rows,
+        json!({ "provider": crate::endpoints::PROVIDER, "readOnly": true, "observedAt": observed_at, "campaigns": rows,
         "claimedToday": null, "claimedPoints": null, "claimEnabled": false,
         "message": "此预览只查询官方活动；已接通的每日积分及新手礼从各自领取入口执行",
         "note": "活动状态不是今日到账证明；套餐赠送积分不增加福利模型 token 池；本次未领取、确认、同意协议或付费",
@@ -94,5 +120,65 @@ fn display_title(kind: &str) -> Option<&'static str> {
         "STUDENT_CERTIFIED" => Some("学生认证"),
         "INVITE_USER" => Some("邀请好友"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent2api_wasm_sdk::Error;
+
+    #[cfg(feature = "intl")]
+    #[test]
+    fn international_token_plan_never_requests_credit_delivery() -> Result<()> {
+        let statistics: Value = serde_json::from_str(include_str!("../../codearts-intl/tests/fixtures/free-token.json"))
+            .map_err(|_| errors::protocol("测试套餐样本无效"))?;
+        for newbie in [false, true] {
+            let mut calls = Vec::new();
+            let result = preview_from(newbie, &[], 123, |request| match request {
+                ReadRequest::Statistics => { calls.push("statistics"); Ok(statistics.clone()) }
+                _ => { calls.push("delivery"); Err(Error::http(400, "HDN.1000: channel : unknown exception")) }
+            })?;
+            assert_eq!(calls, vec!["statistics"]);
+            assert_eq!(result["notApplicable"], true);
+            assert_eq!(result["claimEnabled"], false);
+            assert_eq!(result["campaigns"], json!([]));
+            assert!(result["claimedToday"].is_null());
+            assert_eq!(result["subscription"]["isTokenPackage"], true);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "intl")]
+    #[test]
+    fn credit_or_unknown_plans_keep_real_delivery_errors() -> Result<()> {
+        for package in [json!({"is_token_package":false,"is_credit_package":true}), json!({})] {
+            let mut calls = Vec::new();
+            let result = preview_from(false, &[], 123, |request| match request {
+                ReadRequest::Statistics => { calls.push("statistics"); Ok(json!({"package":package})) }
+                _ => { calls.push("delivery"); Err(Error::http(400, "HDN.1000")) }
+            });
+            assert_eq!(calls, vec!["statistics", "delivery"]);
+            assert_eq!(result.err().and_then(|error| error.status), Some(400));
+        }
+        let mut calls = 0;
+        let result = preview_from(false, &[], 123, |_| { calls += 1; Err(Error::http(401, "expired")) });
+        assert_eq!(calls, 1);
+        assert_eq!(result.err().and_then(|error| error.status), Some(401));
+        Ok(())
+    }
+
+    #[cfg(not(feature = "intl"))]
+    #[test]
+    fn domestic_delivery_request_sequence_is_unchanged() -> Result<()> {
+        let mut calls = 0;
+        let result = preview_from(false, &[], 123, |request| {
+            assert!(matches!(request, ReadRequest::Delivery));
+            calls += 1;
+            Ok(json!({"code":0,"data":{"items":[]}}))
+        })?;
+        assert_eq!(calls, 1);
+        assert_ne!(result["notApplicable"], true);
+        Ok(())
     }
 }

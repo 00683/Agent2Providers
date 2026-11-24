@@ -155,6 +155,23 @@ fn parse(value: &Value, secrets: &[String]) -> Result<Value> {
         report["message"] =
             json!("未取得无重叠且一致的可用积分总数；保留未知并展示上游分项，不当成 0 或重复累加");
     }
+    if cfg!(feature = "intl") && crate::subscription::flags(value)?.0 == Some(true) {
+        let meter = meters.iter().find(|meter| meter.name == "usageTokenChatMessages");
+        let used = meter.and_then(|meter| meter.used_tokens);
+        let total = meter.and_then(|meter| meter.allowance_tokens).filter(|total| *total > 1);
+        let remaining = total.zip(used).map(|(total, used)| total.saturating_sub(used).max(0));
+        report["available"] = json!(remaining);
+        report["unit"] = json!("token");
+        report["aggregation"] = json!("official_chat_token_meter");
+        report["tokenTotal"] = json!(total);
+        report["tokenUsed"] = json!(used);
+        report["note"] = json!(crate::subscription::TOKEN_WELFARE_NOTE);
+        report["message"] = json!(if remaining.is_some() {
+            "Token 套餐：显示官方对话 Token 额度，不折算成积分"
+        } else {
+            "Token 套餐：官方未返回完整的对话 Token 总额与用量，可用量保留未知"
+        });
+    }
     report["quotaSources"] = sources(&report);
     Ok(report)
 }
@@ -279,12 +296,24 @@ fn subscription(value: &Value, secrets: &[String]) -> Result<Value> {
         }
     }
     // 不公开或导航上游任意 package_url；固定来源只读包不新增购买入口。
-    Ok(
-        json!({ "planName": name, "planCode": code, "planUrl": null, "resetDate": reset, "features": features }),
-    )
+    let mut result = json!({ "planName": name, "planCode": code, "planUrl": null, "resetDate": reset, "features": features });
+    if cfg!(feature = "intl") {
+        let (token, credit) = crate::subscription::flags(value)?;
+        result["isTokenPackage"] = json!(token);
+        result["isCreditPackage"] = json!(credit);
+    }
+    Ok(result)
 }
 
 pub fn sources(report: &Value) -> Value {
+    if cfg!(feature = "intl") && report["unit"] == "token" {
+        return match util::finite(report.get("available")) {
+            Some(remaining) => json!([{"id":"account","provider":crate::endpoints::PROVIDER,
+                "label":"套餐 Token","unit":"token","remaining":remaining,
+                "total":report["tokenTotal"],"used":report["tokenUsed"]}]),
+            None => json!([]),
+        };
+    }
     let mut sources = Vec::new();
     if let Some(remaining) = util::finite(report.get("available")) {
         sources.push(
@@ -310,4 +339,23 @@ pub fn sources(report: &Value) -> Value {
             "unit": "积分", "remaining": remaining, "total": util::finite(wallet.get("creditTotal")), "used": used }));
     }
     Value::Array(sources)
+}
+
+#[cfg(all(test, feature = "intl"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn token_balance_uses_token_units_and_never_creates_credits() -> Result<()> {
+        let report = parse(&json!({"package":{"package_name_en":"Free","is_token_package":true,"is_credit_package":false},
+            "metrics":[{"name":"usageTokenChatMessages","show":true,"usage_token_num":250,"package_token_amount":1000}]}), &[])?;
+        assert_eq!(report["unit"], "token");
+        assert_eq!(report["available"], 750);
+        assert_eq!(report["subscription"]["isTokenPackage"], true);
+        assert_eq!(report["quotaSources"][0]["unit"], "token");
+        assert_eq!(report["quotaSources"][0]["remaining"], 750.0);
+        let unknown = parse(&json!({"package":{"is_token_package":true},"metrics":[]}), &[])?;
+        assert!(unknown["available"].is_null());
+        assert_eq!(unknown["quotaSources"], json!([]));
+        Ok(())
+    }
 }

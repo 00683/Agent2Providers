@@ -86,6 +86,23 @@ fn pair(name: &str, value: &str) -> (String, String) {
     (name.into(), value.into())
 }
 
+pub fn welfare_headers() -> Vec<(String, String)> {
+    let mut headers = vec![
+        pair("Content-Type", "application/json"),
+        pair("Agent-Type", "PromptCenter"),
+        pair("X-Language", LANGUAGE),
+    ];
+    if cfg!(feature = "intl") {
+        // The official request wrapper adds these to regional welfare requests.
+        headers.extend([
+            pair("Accept", "application/json"),
+            pair("plugin-name", PLUGIN),
+            pair("plugin-version", VERSION),
+        ]);
+    }
+    headers
+}
+
 fn catalog_headers(agent_type: &str) -> Vec<(String, String)> {
     let mut headers = vec![
         pair("Content-Type", "application/json"),
@@ -163,11 +180,7 @@ pub fn target(request: ReadRequest<'_>) -> Result<Target> {
             value.path = "/v1/ops/delivery".into();
             value.query = "channel=IDE".into();
             value.label = "福利活动状态";
-            value.headers = vec![
-                pair("Content-Type", "application/json"),
-                pair("Agent-Type", "PromptCenter"),
-                pair("X-Language", LANGUAGE),
-            ];
+            value.headers = welfare_headers();
         }
     }
     Ok(value)

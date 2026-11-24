@@ -1,0 +1,10 @@
+{
+  "package": {
+    "package_name_en": "Free",
+    "package_name_cn": "体验版",
+    "spec_code": "codearts.agent.trial",
+    "status": "normal",
+    "is_token_package": true,
+    "is_credit_package": false
+  }
+}

@@ -9,7 +9,7 @@ pub const IMPORT: &str = "导入或粘贴完整凭据 JSON 或使用官方网页
 pub fn chat() -> Error { Error::http(400,"CodeArts 当前通道仅提供模型对话，不提供独立图片生成或编辑接口").with_code("unsupported_parameter") }
 pub fn claim() -> Error { Error::http(400,"CodeArts 福利请从每日签到或新手礼入口领取；不购买套餐或代做认证任务").with_code("unsupported") }
 pub fn status() -> Value {
-    json!({"provider":"codearts","stage":"complete","complete":true,"verified":false,"message":SUMMARY,
+    json!({"provider":crate::endpoints::PROVIDER,"stage":"complete","complete":true,"verified":false,"message":SUMMARY,
         "implemented":["manual_credentials","account_identity","model_catalog","subscription_usage","conversation","session_heartbeat_cleanup",
             "pkce_dpop_login","ticket_fallback","oauth_refresh","welfare_claim_confirm","onboarding_claim"],
         "pending":[],"httpBudget":HTTP_BUDGET,"refresh":REFRESH,"credentialImport":IMPORT,

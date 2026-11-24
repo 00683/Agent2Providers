@@ -122,7 +122,7 @@ fn view(preview: &Value, newbie: bool) -> Result<Value> {
         .filter(|row| row["done"] != true && row["blocked"] != true)
         .count();
     Ok(
-        json!({"provider":"codearts", "tasks": rows, "unclaimed": unclaimed,
+        json!({"provider":crate::endpoints::PROVIDER, "tasks": rows, "unclaimed": unclaimed,
         "earned": amount(&rows, true), "total": amount(&rows, false),
         "settled": !rows.is_empty() && rows.iter().all(|row| row["done"] == true),
         "note":"福利到账的是套餐赠送积分，不增加福利模型的 Token 池"}),
@@ -167,7 +167,7 @@ pub fn status_with_refresh(newbie: bool, refresh: bool) -> Result<Value> {
                         .all(|row| row["done"] == true && row["key"].is_string())
             })
         {
-            let result = json!({"provider":"codearts", "tasks":memory["tasks"], "earned":memory["earned"],
+            let result = json!({"provider":crate::endpoints::PROVIDER, "tasks":memory["tasks"], "earned":memory["earned"],
                 "total":memory["total"], "unclaimed":0, "settled":true, "settledAt":memory["at"]});
             validate_memory(&result, &account)?;
             account.unchanged()?;

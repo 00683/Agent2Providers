@@ -32,7 +32,7 @@ agent2api_wasm_sdk::export_provider!(handle);
 
 fn metadata() -> Value {
     use agent2api_wasm_sdk::error_rules::{attach, class, rule};
-    let meta = json!({ "id": endpoints::PROVIDER, "label": "CodeArts", "order": 28,
+    let meta = json!({ "id": endpoints::PROVIDER, "label": endpoints::LABEL, "order": 28,
         "capabilities": {
             "chat": true, "stateful": true, "refresh": true, "model_refresh": true, "usage": true,
             "checkin": true, "claims": true, "web_login": true,

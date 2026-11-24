@@ -95,7 +95,7 @@ pub struct Credential {
 
 pub fn own_provider(value: &Value) -> Result<()> {
     if let Some(provider) = value.get("provider").filter(|value| !value.is_null()) {
-        if provider.as_str() != Some("codearts") {
+        if provider.as_str() != Some(crate::endpoints::PROVIDER) {
             return Err(errors::invalid("这份凭据不属于 CodeArts，未保存或合并账号"));
         }
     }
@@ -290,7 +290,7 @@ impl Credential {
             return None;
         }
         let secrets = self.secrets();
-        let identity = format!("codearts-{}-{}", self.domain_id, self.user_id);
+        let identity = format!("{}-{}-{}", crate::endpoints::PROVIDER, self.domain_id, self.user_id);
         (![&self.domain_id, &self.user_id, &identity]
             .iter()
             .any(|value| errors::contains_secret(value, &secrets)))
@@ -299,7 +299,7 @@ impl Credential {
 
     pub fn snapshot_identity(&self) -> String {
         format!(
-            "codearts-snapshot-{}",
+            "{}-snapshot-{}", crate::endpoints::PROVIDER,
             util::digest(&[
                 self.domain_id.as_bytes(),
                 self.user_id.as_bytes(),

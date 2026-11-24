@@ -1,0 +1,38 @@
+name: CodeArts international plugins
+on:
+  push:
+    branches: [fix/codearts-intl-20261124]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm -> target
+          key: codearts-intl
+      - name: Verify regional request targets
+        run: |
+          cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-codearts --lib regional_requests
+          cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-codearts-intl --lib regional_requests
+      - name: Build domestic and international packages
+        run: |
+          node wasm/build.mjs codearts
+          node wasm/build.mjs codearts-intl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codearts-international-plugins
+          path: |
+            wasm/dist/agent2api-wasm-codearts-*.zip
+            wasm/dist/agent2api-wasm-codearts-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

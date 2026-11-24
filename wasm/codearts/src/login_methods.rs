@@ -51,6 +51,10 @@ pub fn methods(locale: &str) -> Value {
             "在华为云官方页面完成登录即可添加账号；远程访问面板时，按提示粘贴登录后的回调地址即可。",
         ],
     };
+    let text: Vec<String> = text.iter().map(|value| {
+        if cfg!(feature = "intl") { value.replace("CodeArts", "CodeArts International") }
+        else { value.to_string() }
+    }).collect();
     json!({ "methods": [
         { "methodIndex": 0, "type": "api", "label": text[0], "instructions": text[1],
             "prompts": [

@@ -288,7 +288,7 @@ pub fn sources(report: &Value) -> Value {
     let mut sources = Vec::new();
     if let Some(remaining) = util::finite(report.get("available")) {
         sources.push(
-            json!({ "id": "account", "provider": "codearts", "label": "可用积分",
+            json!({ "id": "account", "provider": crate::endpoints::PROVIDER, "label": "可用积分",
             "unit": "积分", "remaining": remaining, "total": null, "used": null }),
         );
     }
@@ -306,7 +306,7 @@ pub fn sources(report: &Value) -> Value {
         if remaining.is_none() && used.is_none() {
             continue;
         }
-        sources.push(json!({ "id": format!("meter:{name}"), "provider": "codearts", "label": label(name),
+        sources.push(json!({ "id": format!("meter:{name}"), "provider": crate::endpoints::PROVIDER, "label": label(name),
             "unit": "积分", "remaining": remaining, "total": util::finite(wallet.get("creditTotal")), "used": used }));
     }
     Value::Array(sources)

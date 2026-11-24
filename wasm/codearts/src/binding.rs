@@ -29,7 +29,7 @@ fn needs_relogin(record: &Value) -> bool {
 }
 
 fn validate_record(record: &Value, allow_disabled: bool) -> Result<()> {
-    if record["provider"].as_str() != Some("codearts") || !record["secret"].is_object() {
+    if record["provider"].as_str() != Some(crate::endpoints::PROVIDER) || !record["secret"].is_object() {
         return Err(util::invalidated());
     }
     if !allow_disabled && sdk::account_disabled(record) {
@@ -70,7 +70,7 @@ impl Account {
         let bytes = serde_json::to_vec(&raw_secret)
             .map_err(|_| errors::protocol("CodeArts 账号摘要无法计算"))?;
         let binding = Binding {
-            provider: "codearts".into(),
+            provider: crate::endpoints::PROVIDER.into(),
             account: id.into(),
             host_identity: host_identity.into(),
             declared_identity: credential.identity(),

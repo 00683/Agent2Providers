@@ -82,7 +82,14 @@ pub fn step(job: &mut Job, account: &Account) -> Result<()> {
                 Err(_) => job.sources.builtin.failures += 1,
             }
             job.sources.builtin.finish(job.builtin.len());
-            job.stage = Stage::BenefitGate;
+            // The official HK profile does not configure the domestic developer benefit gateway.
+            // International welfare is discovered separately from the regional delivery API.
+            if cfg!(feature = "intl") {
+                job.sources.benefit.phase = Phase::Disabled;
+                job.stage = Stage::Finished;
+            } else {
+                job.stage = Stage::BenefitGate;
+            }
         }
         Stage::BenefitGate => {
             job.sources.benefit.phase = Phase::Running;

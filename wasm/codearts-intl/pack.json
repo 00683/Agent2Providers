@@ -1,0 +1,21 @@
+{
+  "id": "agent2api-wasm-codearts-intl",
+  "name": "CodeArts 国际版",
+  "description": "华为云 CodeArts 国际版：独立网页登录、凭据续期、模型目录、对话、额度及官方活动福利。",
+  "version": "0.1.0",
+  "protocol": 1,
+  "license": "AGPL-3.0-only",
+  "providers": [
+    {
+      "id": "codearts-intl",
+      "label": "CodeArts 国际版",
+      "order": 29,
+      "default_enabled": false
+    }
+  ],
+  "entry": {
+    "wasm32-unknown-unknown": "codearts-intl.wasm"
+  },
+  "icons": "assets",
+  "homepage": "https://github.com/ProvidersPlugin/Agent2Providers"
+}

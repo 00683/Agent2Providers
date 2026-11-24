@@ -3,11 +3,28 @@
 use crate::{encoding, errors};
 use agent2api_wasm_sdk::Result;
 
+#[cfg(not(feature = "intl"))]
 pub const PROVIDER: &str = "codearts";
+#[cfg(feature = "intl")]
+pub const PROVIDER: &str = "codearts-intl";
+#[cfg(not(feature = "intl"))]
+pub const LABEL: &str = "CodeArts";
+#[cfg(feature = "intl")]
+pub const LABEL: &str = "CodeArts 国际版";
+#[cfg(not(feature = "intl"))]
+pub const AUTHORITY: &str = "snap-access.cn-north-4.myhuaweicloud.com";
+#[cfg(feature = "intl")]
+pub const AUTHORITY: &str = "snap-access.ap-southeast-1.myhuaweicloud.com";
+#[cfg(not(feature = "intl"))]
 pub const BASE: &str = "https://snap-access.cn-north-4.myhuaweicloud.com";
+#[cfg(feature = "intl")]
+pub const BASE: &str = "https://snap-access.ap-southeast-1.myhuaweicloud.com";
 pub const BENEFIT: &str = "https://opengw.developer.huaweicloud.com";
 pub const PLUGIN: &str = "snap_vscode";
+#[cfg(not(feature = "intl"))]
 pub const VERSION: &str = "26.9.101";
+#[cfg(feature = "intl")]
+pub const VERSION: &str = "26.10.300";
 pub const LANGUAGE: &str = "en-us";
 pub const MAX_OUTPUT: i64 = 65_536;
 
@@ -58,7 +75,7 @@ impl Target {
     }
     pub fn authority(&self) -> Result<&'static str> {
         match self.origin {
-            BASE => Ok("snap-access.cn-north-4.myhuaweicloud.com"),
+            BASE => Ok(AUTHORITY),
             BENEFIT => Ok("opengw.developer.huaweicloud.com"),
             _ => Err(errors::invalid("CodeArts 请求来源未获本包许可")),
         }
@@ -154,4 +171,24 @@ pub fn target(request: ReadRequest<'_>) -> Result<Target> {
         }
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn regional_requests_sign_the_selected_host() {
+        let request = target(ReadRequest::Statistics).unwrap_or_else(|_| unreachable!());
+        assert_eq!(request.authority().ok(), Some(AUTHORITY));
+        assert_eq!(request.url(), format!("{BASE}/snap-manager/v1/statistics/plugin"));
+        let welfare = target(ReadRequest::Delivery).unwrap_or_else(|_| unreachable!());
+        assert_eq!(welfare.url(), format!("{BASE}/v1/ops/delivery?channel=IDE"));
+        if cfg!(feature = "intl") {
+            assert_eq!(PROVIDER, "codearts-intl");
+            assert!(BASE.contains("ap-southeast-1"));
+        } else {
+            assert_eq!(PROVIDER, "codearts");
+            assert!(BASE.contains("cn-north-4"));
+        }
+    }
 }

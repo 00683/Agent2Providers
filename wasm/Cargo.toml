@@ -10,7 +10,7 @@ members = [
     "autoclaw",
     "autoclaw-intl",
     "catpaw",
-    "codearts",
+    "codearts", "codearts-intl",
     "commandcode",
     "codar",
     "doubaowork",

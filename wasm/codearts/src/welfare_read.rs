@@ -78,7 +78,7 @@ pub fn preview(newbie_only: bool) -> Result<Value> {
     }
     account.unchanged()?;
     Ok(
-        json!({ "provider": "codearts", "readOnly": true, "observedAt": util::now()?, "campaigns": rows,
+        json!({ "provider": crate::endpoints::PROVIDER, "readOnly": true, "observedAt": util::now()?, "campaigns": rows,
         "claimedToday": null, "claimedPoints": null, "claimEnabled": false,
         "message": "此预览只查询官方活动；已接通的每日积分及新手礼从各自领取入口执行",
         "note": "活动状态不是今日到账证明；套餐赠送积分不增加福利模型 token 池；本次未领取、确认、同意协议或付费",

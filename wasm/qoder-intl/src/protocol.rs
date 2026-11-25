@@ -104,8 +104,8 @@ pub fn build(
     {
         payload["parallel_tool_calls"] = value.clone();
     }
-    apply_hungerg_envelope(&mut payload, model, &last);
     context::apply(&mut payload, config, &messages, &tools);
+    apply_hungerg_envelope(&mut payload, model, &last);
     Ok(Payload {
         value: payload,
         thinking: thinking.enabled.is_some() || thinking.effort.is_some(),
@@ -124,7 +124,8 @@ fn apply_hungerg_envelope(payload: &mut Value, model: &Value, last: &str) {
     for field in ["model", "api_key", "url"] {
         descriptor[field] = json!("");
     }
-    if let Some(window) = config["max_input_tokens"].as_i64().filter(|window| *window > 0) {
+    if let Some(window) = descriptor["max_input_tokens"].as_i64()
+        .or_else(|| config["max_input_tokens"].as_i64()).filter(|window| *window > 0) {
         descriptor["max_input_tokens"] = json!(window);
     }
     payload["model_config"] = descriptor.clone();
@@ -159,6 +160,19 @@ mod hungerg_envelope_tests {
         let original = payload.clone();
         apply_hungerg_envelope(&mut payload, &json!({ "upstreamKey": "qfmodel" }), "hello");
         assert_eq!(payload, original);
+    }
+
+    #[test]
+    fn upgraded_context_is_preserved_in_both_model_descriptors() {
+        let model = catalog::find(&catalog::with_campaign(vec![], 1_795_449_600_000), "HungerG").unwrap();
+        let messages = vec![json!({ "role": "user", "content": "字".repeat(200_000) })];
+        let mut payload = json!({ "parameters": {}, "model_config": { "key": "HungerG" },
+            "chat_context": { "extra": {} } });
+        context::apply(&mut payload, &model["config"], &messages, &[]);
+        apply_hungerg_envelope(&mut payload, &model, "hello");
+        assert_eq!(payload["model_config"]["max_input_tokens"], 400_000);
+        assert_eq!(payload["chat_context"]["extra"]["modelConfig"], payload["model_config"]);
+        assert_eq!(payload["parameters"]["context_length"], 400_000);
     }
 }
 fn session_id(user: &str, model: &str, seed: Option<&str>) -> Result<String> {

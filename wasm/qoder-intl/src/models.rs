@@ -12,12 +12,14 @@ const TTL: i64 = 3_600_000;
 const BACKOFF: &str = "catalog-refresh";
 
 pub fn list() -> Result<Value> {
-    let cached = sdk::catalog::cached()?;
+    let mut cached = sdk::catalog::cached()?;
     if cached["meta"]["remote"] == true && cached["models"].is_array() {
+        let models = cached["models"].as_array().cloned().unwrap_or_default();
+        cached["models"] = json!(catalog::public(&catalog::with_campaign(models, util::now()?)));
         return Ok(cached);
     }
     Ok(
-        json!({ "models": catalog::public(&catalog::fallback()), "meta": { "remote": false, "refreshed_at": 0 } }),
+        json!({ "models": catalog::public(&catalog::defaults()), "meta": { "remote": false, "refreshed_at": 0 } }),
     )
 }
 fn cache() -> Result<state::Snapshot> {
@@ -80,11 +82,13 @@ pub fn refresh(params: &Value) -> Result<Value> {
         let before = cache()?;
         if !params["force"].as_bool().unwrap_or(false) {
             if let Some(models) = cached(&before, &snapshot, true)? {
-                let public = catalog::public(&models);
-                let shown = list()?;
+                let public = catalog::public(&catalog::with_campaign(models, util::now()?));
+                // Compare the stored view, before overlaying the campaign. Otherwise
+                // an old host cache without HungerG would be declared unchanged.
+                let shown = sdk::catalog::cached()?;
                 account::unchanged(&snapshot)?;
                 if shown["models"] == json!(public) && shown["meta"]["remote"] == true {
-                    return Ok(sdk::catalog::unchanged(models.len()));
+                    return Ok(sdk::catalog::unchanged(public.len()));
                 }
                 return Ok(
                     json!({ "refreshed": true, "count": public.len(), "models": public,
@@ -105,7 +109,7 @@ pub fn refresh(params: &Value) -> Result<Value> {
             result => result?,
         };
         store(&before, &snapshot, &models)?;
-        Ok(sdk::catalog::refreshed(catalog::public(&models)))
+        Ok(sdk::catalog::refreshed(catalog::public(&catalog::with_campaign(models, util::now()?))))
     })();
     match result {
         Ok(value) => Ok(value),
@@ -151,7 +155,7 @@ pub fn resolve(name: &str, snapshot: &account::Snapshot) -> Result<Value> {
     if name.trim().is_empty() || name.len() > 512 || name.chars().any(char::is_control) {
         return Err(Error::http(400, "Qoder 请指定当前国际目录中的有效模型名"));
     }
-    let models = for_account(snapshot)?;
+    let models = catalog::with_campaign(for_account(snapshot)?, util::now()?);
     // 不查询国内或千问，也不把公共目录中的成员资格视作本账号已开通。
     catalog::find(&models, name).ok_or_else(|| {
         Error::http(400, "模型不在 Qoder 国际版当前目录中，请刷新目录后重试")

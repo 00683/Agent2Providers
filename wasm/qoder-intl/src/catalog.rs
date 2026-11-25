@@ -6,6 +6,44 @@ use agent2api_wasm_sdk::{json, Error, Result, Value};
 pub const MAX_OUTPUT: i64 = 32_768;
 const DEFAULT_CONTEXT: i64 = 200_000;
 
+// Official campaign window, UTC+8: Nov 24 00:00 through Dec 1 00:00 (exclusive).
+const HUNGERG_START: i64 = 1_795_449_600_000;
+const HUNGERG_END: i64 = 1_796_054_400_000;
+const SUPPLEMENT: &str = "qoder-hungerg-202611";
+
+/// Keep official rows authoritative, including explicit denial and changed prices.
+/// The marker survives the public cache so a saved supplement can expire as well.
+pub fn with_campaign(mut models: Vec<Value>, now: i64) -> Vec<Value> {
+    models.retain(|model| model["catalogSupplement"] != SUPPLEMENT);
+    if !(HUNGERG_START..HUNGERG_END).contains(&now)
+        || find(&models, "HungerG").is_some()
+    {
+        return models;
+    }
+    let mut model = entry("HungerG", "HungerG", true, true, 1_000_000);
+    model["supportsReasoningEffort"] = json!(true);
+    model["efforts"] = json!(["low", "medium", "high", "max"]);
+    model["reasoningEffortLevels"] = model["efforts"].clone();
+    model["credits"] = json!("x0 credits");
+    // A campaign announcement is not evidence of this account's entitlement.
+    model["permissionKnown"] = json!(false);
+    model["catalogSupplement"] = json!(SUPPLEMENT);
+    model["catalogSupplementExpiresAt"] = json!(HUNGERG_END);
+    model["config"]["format"] = json!("openai");
+    model["config"]["max_input_tokens"] = json!(180_000);
+    model["config"]["tiers"] = json!([
+        { "tokens": 200_000, "name": "200K", "isDefault": true },
+        { "tokens": 400_000, "name": "400K", "isDefault": false },
+        { "tokens": 1_000_000, "name": "1M", "isDefault": false }
+    ]);
+    models.push(model);
+    models
+}
+
+pub fn defaults() -> Vec<Value> {
+    with_campaign(fallback(), agent2api_wasm_sdk::now())
+}
+
 pub fn fallback() -> Vec<Value> {
     let rows: &[(&str, &str, bool, bool, &[&str], bool, bool, &str)] = &[
         (
@@ -309,4 +347,58 @@ pub fn find(models: &[Value], name: &str) -> Option<Value> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod campaign_tests {
+    use super::*;
+    use crate::reasoning;
+
+    #[test]
+    fn missing_campaign_model_is_resolvable_with_reference_metadata() {
+        let models = with_campaign(fallback(), HUNGERG_START);
+        let model = find(&models, "HungerG").expect("missing campaign model");
+        assert_eq!(model["upstreamKey"], "HungerG");
+        assert_eq!(model["config"]["format"], "openai");
+        assert_eq!(model["credits"], "x0 credits");
+        assert_eq!(model["permissionKnown"], false);
+        assert_eq!(model["maxInputTokens"], 1_000_000);
+        assert_eq!(model["config"]["max_input_tokens"], 180_000);
+        assert_eq!(model["config"]["tiers"].as_array().unwrap().len(), 3);
+        for effort in ["low", "medium", "high", "max"] {
+            assert_eq!(reasoning::resolve(&json!({ "reasoning_effort": effort }), &model)
+                .effort.as_deref(), Some(effort));
+        }
+    }
+
+    #[test]
+    fn official_campaign_entry_is_not_overwritten_or_duplicated() {
+        let models = parse(&json!({ "chat": [], "app": [{
+            "key": "HungerG", "display_name": "HungerG", "format": "openai",
+            "enable": false, "price_factor": 0.7
+        }] })).unwrap();
+        let merged = with_campaign(models.clone(), HUNGERG_START);
+        assert_eq!(merged, models);
+        assert_eq!(find(&merged, "hungerg").unwrap()["accountEnabled"], false);
+        assert_eq!(with_campaign(merged.clone(), HUNGERG_END), merged);
+    }
+
+    #[test]
+    fn saved_public_supplement_expires_at_the_exact_boundary() {
+        assert!(with_campaign(vec![], HUNGERG_START - 1).is_empty());
+        let saved = public(&with_campaign(vec![], HUNGERG_END - 1));
+        assert_eq!(saved.len(), 1);
+        assert!(with_campaign(saved.clone(), HUNGERG_END).is_empty());
+        assert!(with_campaign(saved, HUNGERG_START - 1).is_empty());
+    }
+
+    #[test]
+    fn repeated_overlay_preserves_other_models_and_does_not_duplicate() {
+        let before = fallback();
+        let once = with_campaign(before.clone(), HUNGERG_START);
+        let twice = with_campaign(once.clone(), HUNGERG_START);
+        assert_eq!(twice, once);
+        assert_eq!(&twice[..before.len()], before.as_slice());
+        assert_eq!(with_campaign(twice, HUNGERG_END), before);
+    }
 }

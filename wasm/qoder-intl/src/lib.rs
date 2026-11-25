@@ -44,7 +44,7 @@ fn metadata() -> Value {
         "account_features": { "usage": true, "credit_detail": true, "edition": true,
             "identifier": ["uid", "userId"], "expiry": ["expiresAt"], "email_as_name": true },
         "checkin": { "daily": true, "description": "国际每日活动北京时间 10:00 开窗；需要在插件设置中授权官方设备验证组件。手动福利另行点名，资格及设备每日限领以上游为准。", "modes": ["checkin"] },
-        "default_models": catalog::public(&catalog::fallback()),
+        "default_models": catalog::public(&catalog::defaults()),
         "settings_schema": config::schema(), "settings_group": { "label": endpoints::LABEL } });
     attach(
         meta,

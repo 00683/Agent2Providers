@@ -1,0 +1,34 @@
+name: Qoder HungerG plugin
+on:
+  push:
+    branches: [fix/qoder-hungerg-20261125]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm -> target
+          key: qoder-intl-hungerg
+      - name: Verify campaign merging and reasoning levels
+        run: cargo test --manifest-path wasm/Cargo.toml --locked -p agent2api-wasm-qoder-intl --lib
+      - name: Build only the international Qoder plugin
+        run: node wasm/build.mjs qoder-intl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qoder-hungerg-plugin
+          path: |
+            wasm/dist/agent2api-wasm-qoder-intl-*.zip
+            wasm/dist/agent2api-wasm-qoder-intl-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

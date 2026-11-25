@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "agent2api-wasm-qoder-intl"
-version = "0.1.0"
+version = "0.1.0+hungerg.20261125.1"
 dependencies = [
  "aes",
  "agent2api-wasm-sdk",

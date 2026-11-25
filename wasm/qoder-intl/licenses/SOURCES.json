@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "provider": "qoder-intl",
-  "modifiedAt": "2026-11-10",
+  "modifiedAt": "2026-11-25",
   "sources": [
     {
       "source": "Agent2Providers/crates/providers/src/providers/qoder",
@@ -22,7 +22,10 @@
       "path": "packages/qoder",
       "sourceRecord": "Agent2Providers/licenses/legacy-bun-reference/vendor/qoder/SOURCE.json",
       "purpose": "Preserve the existing repository's documented Qoder protocol attribution chain",
-      "licenses": ["magpie-community-MIT.txt", "CLIProxyAPI-MIT.txt"],
+      "licenses": [
+        "magpie-community-MIT.txt",
+        "CLIProxyAPI-MIT.txt"
+      ],
       "limitation": "The original CLIProxyAPI import revision is not recorded by the existing source."
     }
   ],
@@ -35,6 +38,17 @@
     {
       "url": "https://www.npmjs.com/package/creditdaddy/v/0.8.1",
       "purpose": "Corroborating report of UMID-gated daily campaign discovery and one international account per device per day; no code or components copied",
+      "copiedCode": false
+    },
+    {
+      "url": "https://docs.qoder.com/events/hungerg-free",
+      "purpose": "Official HungerG international personal-account campaign window, no-credit pricing and four reasoning levels",
+      "copiedCode": false
+    },
+    {
+      "url": "https://github.com/shuishuipingan/qoder2api-hub/issues/172",
+      "revision": "3cc8617e88efd57c76a20a9ca20fb6f224daa913",
+      "purpose": "Reference v1.10.1 campaign supplement behavior and qoder_catalog_intl.json model key, format, reasoning and context metadata; no implementation copied",
       "copiedCode": false
     }
   ],

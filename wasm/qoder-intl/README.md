@@ -26,3 +26,22 @@ References:
 Only catalog facts and the campaign-merging behavior are adapted; no Python
 implementation or inference transport code is copied. Rust validation and
 Wasm packaging run in GitHub Actions, not on the user's machine.
+
+## Request compatibility and bounded queue handling
+
+HungerG requests carry the reference model descriptor in `model_config` and
+`chat_context.extra.modelConfig`, including the display name and input window;
+the context text fields use the reference `{ "text": ... }` shape. Other model
+envelopes are unchanged. Account identity, request headers and endpoints remain
+unchanged; protocol differences alone are not evidence of the queue's cause.
+
+The existing `queueMaxWaits` and `queueBudgetSeconds` settings now control the
+actual conversation loop. Only an explicit queue error before output may wait
+and reopen on the same account. The upstream wait deadline is never shortened
+to fit the local budget. The host still controls cancellation and the overall
+request deadline. A zero setting disables waiting. Errors after output are never
+replayed; exhausted budgets return a real error, without pretending success.
+
+This fixes missing local handling, not upstream capacity or account policy.
+Cloud validation uses offline samples; no claim of real HungerG output follows
+from catalog or offline-test success.

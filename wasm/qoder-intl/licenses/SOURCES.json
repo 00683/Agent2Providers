@@ -50,6 +50,11 @@
       "revision": "3cc8617e88efd57c76a20a9ca20fb6f224daa913",
       "purpose": "Reference v1.10.1 campaign supplement behavior and qoder_catalog_intl.json model key, format, reasoning and context metadata; no implementation copied",
       "copiedCode": false
+    },
+    {
+      "url": "https://github.com/shuishuipingan/qoder2api-hub/blob/3cc8617e88efd57c76a20a9ca20fb6f224daa913/qoder_proxy.py",
+      "purpose": "Reference HungerG model descriptor and chat_context text schema, plus finite queue continuation; independently implemented using existing local queue settings, without copying transport code",
+      "copiedCode": false
     }
   ],
   "assets": [

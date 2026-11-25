@@ -104,11 +104,62 @@ pub fn build(
     {
         payload["parallel_tool_calls"] = value.clone();
     }
+    apply_hungerg_envelope(&mut payload, model, &last);
     context::apply(&mut payload, config, &messages, &tools);
     Ok(Payload {
         value: payload,
         thinking: thinking.enabled.is_some() || thinking.effort.is_some(),
     })
+}
+
+// Reference v1.10.1 keeps the complete model descriptor in both copies and
+// represents context text as objects. Limit the compatibility change to HungerG.
+fn apply_hungerg_envelope(payload: &mut Value, model: &Value, last: &str) {
+    if !model["upstreamKey"].as_str().is_some_and(|key| key.eq_ignore_ascii_case("HungerG")) {
+        return;
+    }
+    let config = &model["config"];
+    let mut descriptor = payload["model_config"].clone();
+    descriptor["display_name"] = model["name"].clone();
+    for field in ["model", "api_key", "url"] {
+        descriptor[field] = json!("");
+    }
+    if let Some(window) = config["max_input_tokens"].as_i64().filter(|window| *window > 0) {
+        descriptor["max_input_tokens"] = json!(window);
+    }
+    payload["model_config"] = descriptor.clone();
+    payload["chat_context"]["extra"]["modelConfig"] = descriptor;
+    payload["chat_context"]["extra"]["originalContent"] = json!({ "text": last });
+    payload["chat_context"]["text"] = json!({ "text": last });
+}
+
+#[cfg(test)]
+mod hungerg_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn hunger_context_and_model_copies_match_the_reference_schema() {
+        let models = catalog::with_campaign(vec![], 1_795_449_600_000);
+        let model = catalog::find(&models, "HungerG").unwrap();
+        let mut payload = json!({ "model_config": {
+            "key": "HungerG", "format": "openai", "source": "system",
+            "is_vl": true, "is_reasoning": true
+        }, "chat_context": { "extra": {}, "text": "hello" } });
+        apply_hungerg_envelope(&mut payload, &model, "hello");
+        assert_eq!(payload["model_config"]["display_name"], "HungerG");
+        assert_eq!(payload["model_config"]["max_input_tokens"], 180_000);
+        assert_eq!(payload["chat_context"]["extra"]["modelConfig"], payload["model_config"]);
+        assert_eq!(payload["chat_context"]["text"]["text"], "hello");
+        assert_eq!(payload["chat_context"]["extra"]["originalContent"]["text"], "hello");
+    }
+
+    #[test]
+    fn other_model_envelopes_are_unchanged() {
+        let mut payload = json!({ "model_config": { "key": "qfmodel" } });
+        let original = payload.clone();
+        apply_hungerg_envelope(&mut payload, &json!({ "upstreamKey": "qfmodel" }), "hello");
+        assert_eq!(payload, original);
+    }
 }
 fn session_id(user: &str, model: &str, seed: Option<&str>) -> Result<String> {
     let mut hasher = Sha256::new();

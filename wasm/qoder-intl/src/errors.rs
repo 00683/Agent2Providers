@@ -126,7 +126,7 @@ pub fn classify(status: u16, body: &Value) -> Value {
                 "fatal",
                 503,
                 "qoder_model_busy",
-                "Qoder 模型正在排队，这不是登录态失效或账号额度不足，请稍后重试",
+                "Qoder 返回模型排队信号，本次在等待次数或时间上限内未获得回答",
             )
         } else if signals.codes.contains(&105) || body["code"] == "qoder_auth_expired" {
             (

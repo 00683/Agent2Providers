@@ -1,7 +1,7 @@
 //! 国际 COSY 对话按访问令牌前缀选择 api2/api3；UMID 不参与此业务链路。
 //! 10605 仅首帧前有限排队，105/401 同账号强刷一次；已出流错误绝不伪造成功。
 use super::{
-    account, client, config, cosy, endpoints, errors, models,
+    account, client, config, cosy, endpoints, errors, models, util,
     output::{self, Event, Output},
     protocol, refresh,
 };
